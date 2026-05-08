@@ -1,0 +1,313 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  role          String?   @default("USER")
+  avatar        String?   @default("")
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @default(now()) @updatedAt
+  Comment       Comment[]
+  Like          Like[]
+  Post          Post[]
+  accounts      Account[]
+  sessions      Session[]
+  documents     Document[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+ 
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+ 
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+ 
+  @@unique([provider, providerAccountId])
+  @@map("portal_accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+ 
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@map("portal_sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+ 
+  @@unique([identifier, token])
+  @@map("portal_verification_tokens")
+}
+
+model Document {
+  id                String   @id @default(cuid())
+  name              String
+  size              Int
+  mimeType          String
+  googleDriveFileId String?
+  driveLink         String?
+  status            String   @default("UPLOADED")
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @default(now()) @updatedAt
+
+  @@map("portal_documents")
+}
+
+model Comment {
+  id        String   @id
+  content   String
+  postId    String
+  authorId  String
+  createdAt DateTime @default(now())
+  User      User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  Post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+}
+
+model Like {
+  id        String   @id
+  postId    String
+  userId    String
+  createdAt DateTime @default(now())
+  Post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  User      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, userId])
+}
+
+model Post {
+  id        String    @id
+  content   String
+  image     String?
+  authorId  String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime
+  Comment   Comment[]
+  Like      Like[]
+  User      User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+}
+
+model admin_roles {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String    @unique @db.VarChar(150)
+  permissions Json      @default("[]")
+  created_at  DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+model admin_users {
+  id                                                   Int                  @id @default(autoincrement())
+  username                                             String               @unique @db.VarChar(50)
+  password                                             String               @db.VarChar(255)
+  name                                                 String               @db.VarChar(100)
+  roles                                                Json                 @default("[]")
+  created_at                                           DateTime?            @default(now()) @db.Timestamptz(6)
+  reset_otp                                            String?              @db.VarChar(10)
+  otp_expires                                          DateTime?            @db.Timestamptz(6)
+  status                                               String?              @default("ONLINE") @db.VarChar(50)
+  preferences                                          Json?                @default("{}")
+  phone                                                String?              @db.VarChar(50)
+  department                                           String?              @db.VarChar(100)
+  job_title                                            String?              @db.VarChar(150)
+  reports_to                                           Int?
+  bio                                                  String?
+  avatar_url                                           String?
+  admin_users                                          admin_users?         @relation("admin_usersToadmin_users", fields: [reports_to], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  other_admin_users                                    admin_users[]        @relation("admin_usersToadmin_users")
+  calendar_events                                      calendar_events[]
+  chat_messages_chat_messages_receiver_idToadmin_users chat_messages[]      @relation("chat_messages_receiver_idToadmin_users")
+  chat_messages_chat_messages_sender_idToadmin_users   chat_messages[]      @relation("chat_messages_sender_idToadmin_users")
+  task_activity_logs                                   task_activity_logs[]
+  task_boards                                          task_boards[]
+  task_comments                                        task_comments[]
+  tasks                                                tasks[]
+}
+
+model articles {
+  id         Int       @id @default(autoincrement())
+  title      String    @db.VarChar(255)
+  excerpt    String?
+  content    String
+  image_url  String?
+  created_at DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+model calendar_events {
+  id          Int          @id @default(autoincrement())
+  title       String       @db.VarChar(255)
+  description String?
+  start_time  DateTime     @db.Timestamptz(6)
+  end_time    DateTime     @db.Timestamptz(6)
+  created_by  Int?
+  attendees   Json?        @default("[]")
+  visibility  String?      @default("PRIVATE") @db.VarChar(20)
+  type        String?      @default("MEETING") @db.VarChar(50)
+  created_at  DateTime?    @default(now()) @db.Timestamptz(6)
+  admin_users admin_users? @relation(fields: [created_by], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([start_time, end_time], map: "idx_calendar_time")
+  @@index([created_by], map: "idx_calendar_user")
+}
+
+model chat_messages {
+  id                                                 Int          @id @default(autoincrement())
+  sender_id                                          Int?
+  receiver_id                                        Int?
+  content                                            String
+  is_read                                            Boolean?     @default(false)
+  created_at                                         DateTime?    @default(now()) @db.Timestamptz(6)
+  attachment_url                                     String?
+  attachment_type                                    String?      @db.VarChar(100)
+  attachment_name                                    String?
+  status                                             String?      @default("ACTIVE") @db.VarChar(20)
+  message_type                                       String?      @default("TEXT") @db.VarChar(20)
+  reactions                                          Json?        @default("{}")
+  admin_users_chat_messages_receiver_idToadmin_users admin_users? @relation("chat_messages_receiver_idToadmin_users", fields: [receiver_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  admin_users_chat_messages_sender_idToadmin_users   admin_users? @relation("chat_messages_sender_idToadmin_users", fields: [sender_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([receiver_id, is_read], map: "idx_chat_receiver_read")
+  @@index([sender_id, receiver_id], map: "idx_chat_sender_receiver")
+}
+
+model crm_leads {
+  id             Int       @id @default(autoincrement())
+  source         String    @db.VarChar(100)
+  name           String    @db.VarChar(150)
+  phone          String?   @db.VarChar(50)
+  email          String?   @db.VarChar(100)
+  service        String?   @db.VarChar(150)
+  message        String?
+  payload        Json?
+  status         String?   @default("NEW") @db.VarChar(50)
+  notes          String?
+  created_at     DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at     DateTime? @default(now()) @db.Timestamptz(6)
+  plane_issue_id String?   @db.VarChar(255)
+}
+
+model document_files {
+  id          Int        @id @default(autoincrement())
+  document_id Int?
+  file_data   Bytes
+  documents   documents? @relation(fields: [document_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model documents {
+  id             Int              @id @default(autoincrement())
+  title          String           @db.VarChar(255)
+  file_name      String           @db.VarChar(255)
+  file_size      Int?
+  file_type      String?          @db.VarChar(100)
+  category       String           @db.VarChar(100)
+  allowed_roles  Json?            @default("[]")
+  uploaded_by    String?          @db.VarChar(255)
+  created_at     DateTime?        @default(now()) @db.Timestamptz(6)
+  document_files document_files[]
+}
+
+model task_activity_logs {
+  id          Int          @id @default(autoincrement())
+  task_id     Int?
+  user_id     Int?
+  action      String       @db.VarChar(100)
+  details     Json?        @default("{}")
+  created_at  DateTime?    @default(now()) @db.Timestamptz(6)
+  tasks       tasks?       @relation(fields: [task_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  admin_users admin_users? @relation(fields: [user_id], references: [id], onUpdate: NoAction)
+
+  @@index([task_id], map: "idx_task_logs_task_id")
+}
+
+model task_boards {
+  id          Int          @id @default(autoincrement())
+  name        String       @db.VarChar(255)
+  color       String?      @default("indigo") @db.VarChar(50)
+  created_at  DateTime?    @default(now()) @db.Timestamptz(6)
+  created_by  Int?
+  admin_users admin_users? @relation(fields: [created_by], references: [id], onUpdate: NoAction)
+  tasks       tasks[]
+}
+
+model task_checklists {
+  id           Int       @id @default(autoincrement())
+  task_id      Int?
+  content      String    @db.VarChar(500)
+  is_completed Boolean?  @default(false)
+  created_at   DateTime? @default(now()) @db.Timestamptz(6)
+  tasks        tasks?    @relation(fields: [task_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([task_id], map: "idx_task_checklists_task_id")
+}
+
+model task_comments {
+  id              Int          @id @default(autoincrement())
+  task_id         Int?
+  user_id         Int?
+  content         String?
+  attachment_url  String?
+  attachment_type String?      @db.VarChar(50)
+  attachment_name String?      @db.VarChar(255)
+  created_at      DateTime?    @default(now()) @db.Timestamptz(6)
+  tasks           tasks?       @relation(fields: [task_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  admin_users     admin_users? @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([task_id], map: "idx_task_comments_task_id")
+  @@index([user_id], map: "idx_task_comments_user_id")
+}
+
+model tasks {
+  id                 Int                  @id @default(autoincrement())
+  title              String               @db.VarChar(255)
+  description        String?
+  status             String?              @default("TODO") @db.VarChar(50)
+  priority           String?              @default("NORMAL") @db.VarChar(50)
+  created_by         Int?
+  due_date           DateTime?            @db.Timestamptz(6)
+  created_at         DateTime?            @default(now()) @db.Timestamptz(6)
+  updated_at         DateTime?            @default(now()) @db.Timestamptz(6)
+  assignees          Json?                @default("[]")
+  board_id           Int?
+  start_date         DateTime?            @db.Timestamptz(6)
+  tags               Json?                @default("[]")
+  recurrence_rule    String?              @db.VarChar(50)
+  task_activity_logs task_activity_logs[]
+  task_checklists    task_checklists[]
+  task_comments      task_comments[]
+  task_boards        task_boards?         @relation(fields: [board_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  admin_users        admin_users?         @relation(fields: [created_by], references: [id], onUpdate: NoAction)
+
+  @@index([status], map: "idx_tasks_status")
+}
