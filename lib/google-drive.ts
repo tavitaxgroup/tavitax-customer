@@ -85,7 +85,7 @@ export async function initResumableUpload(fileName: string, mimeType: string) {
   }
 }
 
-export async function getFileMetadata(fileId: string) {
+export async function getFileMetadata(fileId: string): Promise<{success: boolean; webViewLink?: string | null; error?: string}> {
   try {
     const drive = getDriveClient()
     const response = await drive.files.get({
@@ -93,7 +93,7 @@ export async function getFileMetadata(fileId: string) {
       fields: "id, webViewLink"
     })
     
-    return { success: true, ...response.data }
+    return { success: true, webViewLink: response.data.webViewLink }
   } catch (error: any) {
     console.error("Get File Metadata Error:", error)
     return { success: false, error: error.message }
