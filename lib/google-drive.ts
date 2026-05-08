@@ -41,7 +41,44 @@ export async function uploadToDrive(fileBuffer: Buffer, fileName: string, mimeTy
   }
 }
 
-export async function initResumableUpload(fileName: string, mimeType: string) {
+export async function getOrCreateCustomerFolder(folderName: string) {
+  try {
+    const drive = getDriveClient()
+    const rootFolderId = process.env.GOOGLE_DRIVE_FOLDER_ID
+
+    // 1. Tìm xem thư mục khách hàng đã tồn tại chưa
+    const query = `mimeType='application/vnd.google-apps.folder' and name='${folderName}' and trashed=false and '${rootFolderId}' in parents`
+    const res = await drive.files.list({
+      q: query,
+      fields: "files(id, name)",
+      spaces: "drive"
+    })
+
+    if (res.data.files && res.data.files.length > 0) {
+      // Đã có thư mục, trả về ID của thư mục đó
+      return { success: true, folderId: res.data.files[0].id }
+    }
+
+    // 2. Chưa có thì tạo thư mục mới
+    const fileMetadata = {
+      name: folderName,
+      mimeType: "application/vnd.google-apps.folder",
+      parents: rootFolderId ? [rootFolderId] : []
+    }
+
+    const createRes = await drive.files.create({
+      requestBody: fileMetadata,
+      fields: "id"
+    })
+
+    return { success: true, folderId: createRes.data.id }
+  } catch (error: any) {
+    console.error("Get/Create Folder Error:", error)
+    return { success: false, error: error.message }
+  }
+}
+
+export async function initResumableUpload(fileName: string, mimeType: string, targetFolderId: string) {
   try {
     const oauth2Client = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID,
@@ -53,8 +90,6 @@ export async function initResumableUpload(fileName: string, mimeType: string) {
     // Get a fresh access token
     const { token } = await oauth2Client.getAccessToken()
     if (!token) throw new Error("Could not get access token")
-
-    const folderId = process.env.GOOGLE_DRIVE_FOLDER_ID
     
     // Create the upload session
     const response = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable", {
@@ -66,7 +101,7 @@ export async function initResumableUpload(fileName: string, mimeType: string) {
       },
       body: JSON.stringify({
         name: fileName,
-        parents: folderId ? [folderId] : []
+        parents: targetFolderId ? [targetFolderId] : []
       })
     })
 

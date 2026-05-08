@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { auth } from "@/auth"
-import { initResumableUpload } from "@/lib/google-drive"
+import { initResumableUpload, getOrCreateCustomerFolder } from "@/lib/google-drive"
 
 export async function POST(req: NextRequest) {
   try {
@@ -16,8 +16,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 })
     }
 
-    // Xin Google cấp phát Resumable Upload URL
-    const result = await initResumableUpload(fileName, mimeType)
+    // Sinh tên thư mục riêng cho khách hàng
+    const folderName = `${session.user.name || "Khách hàng"} - ${session.user.email}`
+    
+    // Lấy hoặc tạo thư mục
+    const folderResult = await getOrCreateCustomerFolder(folderName)
+    if (!folderResult.success || !folderResult.folderId) {
+      return NextResponse.json({ error: "Không thể khởi tạo thư mục khách hàng trên Drive" }, { status: 500 })
+    }
+
+    // Xin Google cấp phát Resumable Upload URL vào thư mục con
+    const result = await initResumableUpload(fileName, mimeType, folderResult.folderId)
 
     if (!result.success) {
       return NextResponse.json({ error: "Cannot initialize upload session" }, { status: 500 })
