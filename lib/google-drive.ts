@@ -78,7 +78,7 @@ export async function getOrCreateCustomerFolder(folderName: string) {
   }
 }
 
-export async function initResumableUpload(fileName: string, mimeType: string, targetFolderId: string) {
+export async function initResumableUpload(fileName: string, mimeType: string, targetFolderId: string, origin?: string, size?: number) {
   try {
     const oauth2Client = new google.auth.OAuth2(
       process.env.GOOGLE_CLIENT_ID,
@@ -91,14 +91,22 @@ export async function initResumableUpload(fileName: string, mimeType: string, ta
     const { token } = await oauth2Client.getAccessToken()
     if (!token) throw new Error("Could not get access token")
     
+    const headers: any = {
+      "Authorization": `Bearer ${token}`,
+      "Content-Type": "application/json",
+      "X-Upload-Content-Type": mimeType
+    }
+    if (origin) {
+      headers["Origin"] = origin
+    }
+    if (typeof size === "number") {
+      headers["X-Upload-Content-Length"] = size.toString()
+    }
+
     // Create the upload session
     const response = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable", {
       method: "POST",
-      headers: {
-        "Authorization": `Bearer ${token}`,
-        "Content-Type": "application/json",
-        "X-Upload-Content-Type": mimeType
-      },
+      headers,
       body: JSON.stringify({
         name: fileName,
         parents: targetFolderId ? [targetFolderId] : []

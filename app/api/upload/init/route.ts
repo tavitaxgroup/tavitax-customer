@@ -16,6 +16,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 })
     }
 
+    const origin = req.headers.get("origin") || undefined
+
     // Sinh tên thư mục riêng cho khách hàng
     const folderName = `${session.user.name || "Khách hàng"} - ${session.user.email}`
     
@@ -26,7 +28,7 @@ export async function POST(req: NextRequest) {
     }
 
     // Xin Google cấp phát Resumable Upload URL vào thư mục con
-    const result = await initResumableUpload(fileName, mimeType, folderResult.folderId)
+    const result = await initResumableUpload(fileName, mimeType, folderResult.folderId, origin, size)
 
     if (!result.success) {
       return NextResponse.json({ error: "Cannot initialize upload session" }, { status: 500 })
