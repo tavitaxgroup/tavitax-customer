@@ -5,13 +5,14 @@ import { UploadCloud, File, X, CheckCircle2, Loader2, AlertCircle, Folder } from
 
 export function UploadZone() {
   const [files, setFiles] = useState<File[]>([])
-  const [currentFileIndex, setCurrentFileIndex] = useState(0)
+  const [completedCount, setCompletedCount] = useState(0)
   const [isDragging, setIsDragging] = useState(false)
   const [status, setStatus] = useState<"idle" | "uploading" | "success" | "error">("idle")
   const [errorMsg, setErrorMsg] = useState("")
   const [progress, setProgress] = useState(0)
   
-  const xhrRef = useRef<XMLHttpRequest | null>(null)
+  const activeXhrsRef = useRef<Set<XMLHttpRequest>>(new Set())
+  const loadedBytesRef = useRef<number[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
 
@@ -20,18 +21,17 @@ export function UploadZone() {
       setFiles(Array.from(e.target.files))
       setStatus("idle")
       setProgress(0)
-      setCurrentFileIndex(0)
+      setCompletedCount(0)
     }
   }
 
   const cancelUpload = () => {
-    if (xhrRef.current) {
-      xhrRef.current.abort()
-    }
+    activeXhrsRef.current.forEach(xhr => xhr.abort())
+    activeXhrsRef.current.clear()
     setStatus("idle")
     setProgress(0)
     setFiles([])
-    setCurrentFileIndex(0)
+    setCompletedCount(0)
   }
 
   const handleUpload = async () => {
@@ -39,81 +39,116 @@ export function UploadZone() {
 
     setStatus("uploading")
     setProgress(0)
+    setCompletedCount(0)
+    setErrorMsg("")
 
     try {
       const totalBytes = files.reduce((acc, f) => acc + f.size, 0)
-      let totalUploadedBytes = 0
+      loadedBytesRef.current = new Array(files.length).fill(0)
+      
+      let hasError = false
+      let currentIndex = 0
+      let localCompleted = 0
+      const CONCURRENCY = 4 // Upload 4 files concurrently
 
-      for (let i = 0; i < files.length; i++) {
-        setCurrentFileIndex(i)
+      const uploadNext = async (): Promise<void> => {
+        if (hasError || currentIndex >= files.length) return
+        
+        const i = currentIndex++
         const currentFile = files[i]
-
         const fileName = currentFile.webkitRelativePath || currentFile.name
 
-        // 1. Xin URL upload từ backend
-        const initRes = await fetch("/api/upload/init", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            fileName: fileName,
-            mimeType: currentFile.type || "application/octet-stream",
-            size: currentFile.size
-          })
-        })
-
-        if (!initRes.ok) throw new Error(`Không thể khởi tạo tải lên cho ${currentFile.name}`)
-        const { uploadUrl } = await initRes.json()
-
-        // 2. Tải file thẳng lên Google Drive thông qua Resumable URL
-        const fileId = await new Promise<string>((resolve, reject) => {
-          const xhr = new XMLHttpRequest()
-          xhrRef.current = xhr
-
-          xhr.upload.addEventListener("progress", (event) => {
-            if (event.lengthComputable && totalBytes > 0) {
-              const currentOverallUploaded = totalUploadedBytes + event.loaded
-              const percentComplete = Math.round((currentOverallUploaded / totalBytes) * 100)
-              setProgress(percentComplete > 100 ? 100 : percentComplete)
-            }
+        try {
+          // 1. Xin URL upload từ backend
+          const initRes = await fetch("/api/upload/init", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              fileName: fileName,
+              mimeType: currentFile.type || "application/octet-stream",
+              size: currentFile.size
+            })
           })
 
-          xhr.addEventListener("load", () => {
-            if (xhr.status >= 200 && xhr.status < 300) {
-              const response = JSON.parse(xhr.responseText)
-              resolve(response.id)
-            } else {
-              reject(new Error("Lỗi khi tải file lên Google Drive"))
-            }
+          if (!initRes.ok) throw new Error(`Không thể khởi tạo tải lên cho ${currentFile.name}`)
+          const { uploadUrl } = await initRes.json()
+
+          // 2. Tải file thẳng lên Google Drive thông qua Resumable URL
+          const fileId = await new Promise<string>((resolve, reject) => {
+            const xhr = new XMLHttpRequest()
+            activeXhrsRef.current.add(xhr)
+
+            xhr.upload.addEventListener("progress", (event) => {
+              if (event.lengthComputable && totalBytes > 0) {
+                loadedBytesRef.current[i] = event.loaded
+                const currentOverallUploaded = loadedBytesRef.current.reduce((a, b) => a + b, 0)
+                const percentComplete = Math.round((currentOverallUploaded / totalBytes) * 100)
+                setProgress(percentComplete > 100 ? 100 : percentComplete)
+              }
+            })
+
+            xhr.addEventListener("load", () => {
+              activeXhrsRef.current.delete(xhr)
+              if (xhr.status >= 200 && xhr.status < 300) {
+                const response = JSON.parse(xhr.responseText)
+                resolve(response.id)
+              } else {
+                reject(new Error("Lỗi khi tải file lên Google Drive"))
+              }
+            })
+
+            xhr.addEventListener("error", () => {
+              activeXhrsRef.current.delete(xhr)
+              reject(new Error("Lỗi kết nối mạng"))
+            })
+            xhr.addEventListener("abort", () => {
+              activeXhrsRef.current.delete(xhr)
+              reject(new Error("Đã hủy tải lên"))
+            })
+
+            xhr.open("PUT", uploadUrl, true)
+            xhr.setRequestHeader("Content-Type", currentFile.type || "application/octet-stream")
+            xhr.send(currentFile)
           })
 
-          xhr.addEventListener("error", () => reject(new Error("Lỗi kết nối mạng")))
-          xhr.addEventListener("abort", () => reject(new Error("Đã hủy tải lên")))
+          loadedBytesRef.current[i] = currentFile.size
+          if (totalBytes > 0) {
+            const currentOverallUploaded = loadedBytesRef.current.reduce((a, b) => a + b, 0)
+            setProgress(Math.round((currentOverallUploaded / totalBytes) * 100))
+          }
 
-          xhr.open("PUT", uploadUrl, true)
-          xhr.setRequestHeader("Content-Type", currentFile.type || "application/octet-stream")
-          xhr.send(currentFile)
-        })
+          // 3. Xác nhận tải lên thành công với backend để lưu DB
+          const confirmRes = await fetch("/api/upload/confirm", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              fileName: fileName,
+              mimeType: currentFile.type || "application/octet-stream",
+              size: currentFile.size,
+              fileId: fileId
+            })
+          })
 
-        // Cộng dồn byte đã upload sau khi file tải xong
-        totalUploadedBytes += currentFile.size
-        if (totalBytes > 0) {
-          setProgress(Math.round((totalUploadedBytes / totalBytes) * 100))
+          if (!confirmRes.ok) throw new Error(`Lỗi khi lưu thông tin tài liệu ${currentFile.name}`)
+
+          localCompleted++
+          setCompletedCount(localCompleted)
+
+          // Upload next file in queue
+          await uploadNext()
+        } catch (err: any) {
+          hasError = true
+          throw err
         }
-
-        // 3. Xác nhận tải lên thành công với backend để lưu DB
-        const confirmRes = await fetch("/api/upload/confirm", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            fileName: fileName,
-            mimeType: currentFile.type || "application/octet-stream",
-            size: currentFile.size,
-            fileId: fileId
-          })
-        })
-
-        if (!confirmRes.ok) throw new Error(`Lỗi khi lưu thông tin tài liệu ${currentFile.name}`)
       }
+
+      // Start workers
+      const workers = []
+      for (let w = 0; w < CONCURRENCY; w++) {
+        workers.push(uploadNext())
+      }
+      
+      await Promise.all(workers)
 
       setStatus("success")
       setFiles([])
@@ -154,7 +189,7 @@ export function UploadZone() {
             setFiles(Array.from(e.dataTransfer.files))
             setStatus("idle")
             setProgress(0)
-            setCurrentFileIndex(0)
+            setCompletedCount(0)
           }
         }}
       >
@@ -222,7 +257,7 @@ export function UploadZone() {
               <div className="w-full max-w-xs mb-4">
                 <div className="flex justify-between text-xs text-slate-500 mb-1">
                   <span className="truncate max-w-[200px]">
-                    {isFolderUpload ? `Đang tải thư mục (${currentFileIndex + 1}/${files.length})...` : `Đang tải (${currentFileIndex + 1}/${files.length})...`}
+                    Đang tải ({Math.min(completedCount + 1, files.length)}/{files.length})...
                   </span>
                   <span>{progress}%</span>
                 </div>
