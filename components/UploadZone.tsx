@@ -49,7 +49,7 @@ export function UploadZone() {
       let hasError = false
       let currentIndex = 0
       let localCompleted = 0
-      const CONCURRENCY = 10 // Tăng concurrency lên 10 để tăng tốc
+      const CONCURRENCY = 5 // Giảm xuống 5 để tránh quá tải Google API
       const CHUNK_SIZE = 50 * 1024 * 1024; // 50MB chunks cho file siêu lớn
 
       const uploadNext = async (): Promise<void> => {
@@ -59,78 +59,40 @@ export function UploadZone() {
         const currentFile = files[i]
         const fileName = currentFile.webkitRelativePath || currentFile.name
 
-        try {
-          // 1. Xin URL upload từ backend
-          const initRes = await fetch("/api/upload/init", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              fileName: fileName,
-              mimeType: currentFile.type || "application/octet-stream",
-              size: currentFile.size
+        let attempt = 0;
+        let success = false;
+        let lastErr: any;
+
+        while (attempt < 3 && !success && !hasError) {
+          attempt++;
+          try {
+            // 1. Xin URL upload từ backend
+            const initRes = await fetch("/api/upload/init", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                fileName: fileName,
+                mimeType: currentFile.type || "application/octet-stream",
+                size: currentFile.size
+              })
             })
-          })
 
-          if (!initRes.ok) throw new Error(`Không thể khởi tạo tải lên cho ${currentFile.name}`)
-          const { uploadUrl } = await initRes.json()
+            if (!initRes.ok) throw new Error(`Không thể khởi tạo tải lên cho ${currentFile.name}`)
+            const { uploadUrl } = await initRes.json()
 
-          // 2. Tải file lên
-          let uploadedBytes = 0;
-          let fileId = "";
+            // 2. Tải file lên
+            let uploadedBytes = 0;
+            let fileId = "";
 
-          if (currentFile.size === 0) {
-            // Xử lý riêng cho file 0-byte (thường gặp trong các thư mục source code)
-            fileId = await new Promise<string>((resolve, reject) => {
-              const xhr = new XMLHttpRequest()
-              activeXhrsRef.current.add(xhr)
-
-              xhr.upload.addEventListener("progress", (event) => {
-                if (event.lengthComputable && totalBytes > 0) {
-                  loadedBytesRef.current[i] = event.loaded
-                  const currentOverallUploaded = loadedBytesRef.current.reduce((a, b) => a + b, 0)
-                  const percentComplete = Math.round((currentOverallUploaded / totalBytes) * 100)
-                  setProgress(percentComplete > 100 ? 100 : percentComplete)
-                }
-              })
-
-              xhr.addEventListener("load", () => {
-                activeXhrsRef.current.delete(xhr)
-                if (xhr.status === 200 || xhr.status === 201) {
-                  const response = JSON.parse(xhr.responseText)
-                  resolve(response.id)
-                } else {
-                  reject(new Error("Lỗi khi tải file rỗng lên Google Drive"))
-                }
-              })
-
-              xhr.addEventListener("error", () => {
-                activeXhrsRef.current.delete(xhr)
-                reject(new Error("Lỗi kết nối mạng"))
-              })
-              xhr.addEventListener("abort", () => {
-                activeXhrsRef.current.delete(xhr)
-                reject(new Error("Đã hủy tải lên"))
-              })
-
-              xhr.open("PUT", uploadUrl, true)
-              xhr.setRequestHeader("Content-Type", currentFile.type || "application/octet-stream")
-              xhr.send(currentFile)
-            })
-          } else {
-            // Xử lý chunking cho file có dữ liệu
-            while (uploadedBytes < currentFile.size) {
-              if (hasError) break;
-
-              const chunkEnd = Math.min(uploadedBytes + CHUNK_SIZE, currentFile.size);
-              const chunk = currentFile.slice(uploadedBytes, chunkEnd);
-
+            if (currentFile.size === 0) {
+              // Xử lý riêng cho file 0-byte (thường gặp trong các thư mục source code)
               fileId = await new Promise<string>((resolve, reject) => {
                 const xhr = new XMLHttpRequest()
                 activeXhrsRef.current.add(xhr)
 
                 xhr.upload.addEventListener("progress", (event) => {
                   if (event.lengthComputable && totalBytes > 0) {
-                    loadedBytesRef.current[i] = uploadedBytes + event.loaded
+                    loadedBytesRef.current[i] = event.loaded
                     const currentOverallUploaded = loadedBytesRef.current.reduce((a, b) => a + b, 0)
                     const percentComplete = Math.round((currentOverallUploaded / totalBytes) * 100)
                     setProgress(percentComplete > 100 ? 100 : percentComplete)
@@ -139,13 +101,11 @@ export function UploadZone() {
 
                 xhr.addEventListener("load", () => {
                   activeXhrsRef.current.delete(xhr)
-                  if (xhr.status === 308) {
-                    resolve("incomplete") 
-                  } else if (xhr.status === 200 || xhr.status === 201) {
+                  if (xhr.status === 200 || xhr.status === 201) {
                     const response = JSON.parse(xhr.responseText)
                     resolve(response.id)
                   } else {
-                    reject(new Error("Lỗi khi tải mảnh dữ liệu lên Google Drive"))
+                    reject(new Error("Lỗi khi tải file rỗng lên Google Drive"))
                   }
                 })
 
@@ -160,44 +120,105 @@ export function UploadZone() {
 
                 xhr.open("PUT", uploadUrl, true)
                 xhr.setRequestHeader("Content-Type", currentFile.type || "application/octet-stream")
-                xhr.setRequestHeader("Content-Range", `bytes ${uploadedBytes}-${chunkEnd - 1}/${currentFile.size}`)
-                xhr.send(chunk)
+                xhr.send(currentFile)
               })
+            } else {
+              // Xử lý chunking cho file có dữ liệu
+              while (uploadedBytes < currentFile.size) {
+                if (hasError) break;
 
-              uploadedBytes = chunkEnd;
+                const chunkEnd = Math.min(uploadedBytes + CHUNK_SIZE, currentFile.size);
+                const chunk = currentFile.slice(uploadedBytes, chunkEnd);
+
+                fileId = await new Promise<string>((resolve, reject) => {
+                  const xhr = new XMLHttpRequest()
+                  activeXhrsRef.current.add(xhr)
+
+                  xhr.upload.addEventListener("progress", (event) => {
+                    if (event.lengthComputable && totalBytes > 0) {
+                      loadedBytesRef.current[i] = uploadedBytes + event.loaded
+                      const currentOverallUploaded = loadedBytesRef.current.reduce((a, b) => a + b, 0)
+                      const percentComplete = Math.round((currentOverallUploaded / totalBytes) * 100)
+                      setProgress(percentComplete > 100 ? 100 : percentComplete)
+                    }
+                  })
+
+                  xhr.addEventListener("load", () => {
+                    activeXhrsRef.current.delete(xhr)
+                    if (xhr.status === 308) {
+                      resolve("incomplete") 
+                    } else if (xhr.status === 200 || xhr.status === 201) {
+                      const response = JSON.parse(xhr.responseText)
+                      resolve(response.id)
+                    } else {
+                      reject(new Error("Lỗi khi tải mảnh dữ liệu lên Google Drive"))
+                    }
+                  })
+
+                  xhr.addEventListener("error", () => {
+                    activeXhrsRef.current.delete(xhr)
+                    reject(new Error("Lỗi kết nối mạng"))
+                  })
+                  xhr.addEventListener("abort", () => {
+                    activeXhrsRef.current.delete(xhr)
+                    reject(new Error("Đã hủy tải lên"))
+                  })
+
+                  xhr.open("PUT", uploadUrl, true)
+                  xhr.setRequestHeader("Content-Type", currentFile.type || "application/octet-stream")
+                  xhr.setRequestHeader("Content-Range", `bytes ${uploadedBytes}-${chunkEnd - 1}/${currentFile.size}`)
+                  xhr.send(chunk)
+                })
+
+                uploadedBytes = chunkEnd;
+              }
+            }
+
+            if (hasError) return;
+
+            loadedBytesRef.current[i] = currentFile.size
+            if (totalBytes > 0) {
+              const currentOverallUploaded = loadedBytesRef.current.reduce((a, b) => a + b, 0)
+              setProgress(Math.round((currentOverallUploaded / totalBytes) * 100))
+            }
+
+            // 3. Xác nhận tải lên thành công với backend để lưu DB
+            const confirmRes = await fetch("/api/upload/confirm", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                fileName: fileName,
+                mimeType: currentFile.type || "application/octet-stream",
+                size: currentFile.size,
+                fileId: fileId
+              })
+            })
+
+            if (!confirmRes.ok) throw new Error(`Lỗi khi lưu thông tin tài liệu ${currentFile.name}`)
+
+            success = true;
+          } catch (err: any) {
+            lastErr = err;
+            if (err.message === "Đã hủy tải lên") {
+              hasError = true;
+              throw err;
+            }
+            // Nếu lỗi, đợi 1 khoảng thời gian tỷ lệ thuận với số lần thử lại trước khi retry
+            if (attempt < 3) {
+              await new Promise(r => setTimeout(r, 1500 * attempt));
             }
           }
+        } // end while retry
 
-          if (hasError) return;
+        if (!success && !hasError) {
+          hasError = true;
+          throw lastErr;
+        }
 
-          loadedBytesRef.current[i] = currentFile.size
-          if (totalBytes > 0) {
-            const currentOverallUploaded = loadedBytesRef.current.reduce((a, b) => a + b, 0)
-            setProgress(Math.round((currentOverallUploaded / totalBytes) * 100))
-          }
-
-          // 3. Xác nhận tải lên thành công với backend để lưu DB
-          const confirmRes = await fetch("/api/upload/confirm", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              fileName: fileName,
-              mimeType: currentFile.type || "application/octet-stream",
-              size: currentFile.size,
-              fileId: fileId
-            })
-          })
-
-          if (!confirmRes.ok) throw new Error(`Lỗi khi lưu thông tin tài liệu ${currentFile.name}`)
-
+        if (success) {
           localCompleted++
           setCompletedCount(localCompleted)
-
-          // Upload next file in queue
           await uploadNext()
-        } catch (err: any) {
-          hasError = true
-          throw err
         }
       }
 

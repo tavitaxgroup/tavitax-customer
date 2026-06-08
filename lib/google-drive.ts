@@ -46,8 +46,9 @@ export async function getOrCreateCustomerFolder(folderName: string) {
     const drive = getDriveClient()
     const rootFolderId = process.env.GOOGLE_DRIVE_FOLDER_ID
 
-    // 1. Tìm xem thư mục khách hàng đã tồn tại chưa
-    const query = `mimeType='application/vnd.google-apps.folder' and name='${folderName}' and trashed=false and '${rootFolderId}' in parents`
+    // 1. Tìm xem thư mục khách hàng đã tồn tại chưa (cần escape dấu nháy đơn)
+    const escapedFolderName = folderName.replace(/'/g, "\\'")
+    const query = `mimeType='application/vnd.google-apps.folder' and name='${escapedFolderName}' and trashed=false and '${rootFolderId}' in parents`
     const res = await drive.files.list({
       q: query,
       fields: "files(id, name)",
@@ -82,7 +83,8 @@ export async function getOrCreateFolderInParent(folderName: string, parentId: st
   try {
     const drive = getDriveClient()
 
-    const query = `mimeType='application/vnd.google-apps.folder' and name='${folderName}' and trashed=false and '${parentId}' in parents`
+    const escapedFolderName = folderName.replace(/'/g, "\\'")
+    const query = `mimeType='application/vnd.google-apps.folder' and name='${escapedFolderName}' and trashed=false and '${parentId}' in parents`
     const res = await drive.files.list({
       q: query,
       fields: "files(id, name)",
