@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server"
 import { auth } from "@/auth"
-import { initResumableUpload, getOrCreateCustomerFolder } from "@/lib/google-drive"
+import { initResumableUpload, getOrCreateCustomerFolder, getOrCreateFolderInParent } from "@/lib/google-drive"
+
+const folderIdCache = new Map<string, string>()
 
 export async function POST(req: NextRequest) {
   try {
@@ -27,8 +29,32 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Không thể khởi tạo thư mục khách hàng trên Drive" }, { status: 500 })
     }
 
+    let targetFolderId = folderResult.folderId
+    let finalFileName = fileName
+
+    const pathParts = fileName.split('/')
+    if (pathParts.length > 1) {
+      finalFileName = pathParts.pop()!
+      let currentPath = ""
+      for (const part of pathParts) {
+        currentPath = currentPath ? `${currentPath}/${part}` : part
+        const cacheKey = `${targetFolderId}_${part}`
+        
+        if (folderIdCache.has(cacheKey)) {
+          targetFolderId = folderIdCache.get(cacheKey)!
+        } else {
+          const subResult = await getOrCreateFolderInParent(part, targetFolderId)
+          if (!subResult.success || !subResult.folderId) {
+            return NextResponse.json({ error: "Lỗi tạo thư mục con trên Drive" }, { status: 500 })
+          }
+          targetFolderId = subResult.folderId
+          folderIdCache.set(cacheKey, targetFolderId)
+        }
+      }
+    }
+
     // Xin Google cấp phát Resumable Upload URL vào thư mục con
-    const result = await initResumableUpload(fileName, mimeType, folderResult.folderId, origin, size)
+    const result = await initResumableUpload(finalFileName, mimeType, targetFolderId, origin, size)
 
     if (!result.success) {
       return NextResponse.json({ error: "Cannot initialize upload session" }, { status: 500 })

@@ -41,9 +41,11 @@ export function UploadZone() {
     setProgress(0)
 
     try {
+      const totalBytes = files.reduce((acc, f) => acc + f.size, 0)
+      let totalUploadedBytes = 0
+
       for (let i = 0; i < files.length; i++) {
         setCurrentFileIndex(i)
-        setProgress(0)
         const currentFile = files[i]
 
         const fileName = currentFile.webkitRelativePath || currentFile.name
@@ -59,7 +61,7 @@ export function UploadZone() {
           })
         })
 
-        if (!initRes.ok) throw new Error("Không thể khởi tạo phiên tải lên")
+        if (!initRes.ok) throw new Error(`Không thể khởi tạo tải lên cho ${currentFile.name}`)
         const { uploadUrl } = await initRes.json()
 
         // 2. Tải file thẳng lên Google Drive thông qua Resumable URL
@@ -68,15 +70,15 @@ export function UploadZone() {
           xhrRef.current = xhr
 
           xhr.upload.addEventListener("progress", (event) => {
-            if (event.lengthComputable) {
-              const percentComplete = Math.round((event.loaded / event.total) * 100)
-              setProgress(percentComplete)
+            if (event.lengthComputable && totalBytes > 0) {
+              const currentOverallUploaded = totalUploadedBytes + event.loaded
+              const percentComplete = Math.round((currentOverallUploaded / totalBytes) * 100)
+              setProgress(percentComplete > 100 ? 100 : percentComplete)
             }
           })
 
           xhr.addEventListener("load", () => {
             if (xhr.status >= 200 && xhr.status < 300) {
-              // Google trả về thông tin file trong response JSON
               const response = JSON.parse(xhr.responseText)
               resolve(response.id)
             } else {
@@ -92,6 +94,12 @@ export function UploadZone() {
           xhr.send(currentFile)
         })
 
+        // Cộng dồn byte đã upload sau khi file tải xong
+        totalUploadedBytes += currentFile.size
+        if (totalBytes > 0) {
+          setProgress(Math.round((totalUploadedBytes / totalBytes) * 100))
+        }
+
         // 3. Xác nhận tải lên thành công với backend để lưu DB
         const confirmRes = await fetch("/api/upload/confirm", {
           method: "POST",
@@ -104,7 +112,7 @@ export function UploadZone() {
           })
         })
 
-        if (!confirmRes.ok) throw new Error("Lỗi khi lưu thông tin tài liệu")
+        if (!confirmRes.ok) throw new Error(`Lỗi khi lưu thông tin tài liệu ${currentFile.name}`)
       }
 
       setStatus("success")
@@ -122,6 +130,10 @@ export function UploadZone() {
       }
     }
   }
+
+  const isFolderUpload = files.length > 0 && files[0].webkitRelativePath !== ""
+  const folderName = isFolderUpload ? files[0].webkitRelativePath.split('/')[0] : ""
+  const totalSizeMB = (files.reduce((acc, f) => acc + f.size, 0) / 1024 / 1024).toFixed(2)
 
   return (
     <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 p-6 mb-8">
@@ -197,20 +209,20 @@ export function UploadZone() {
         ) : (
           <div className="flex flex-col items-center z-10 relative">
             <div className="w-16 h-16 bg-blue-100 dark:bg-blue-900/30 text-blue-500 dark:text-blue-400 rounded-xl flex items-center justify-center mb-4">
-              {files.length > 1 ? <Folder className="w-8 h-8" /> : <File className="w-8 h-8" />}
+              {isFolderUpload || files.length > 1 ? <Folder className="w-8 h-8" /> : <File className="w-8 h-8" />}
             </div>
             <p className="font-medium text-slate-900 dark:text-white truncate max-w-xs">
-              {files.length === 1 ? (files[0].webkitRelativePath || files[0].name) : `Đã chọn ${files.length} file`}
+              {isFolderUpload ? `Thư mục: ${folderName}` : files.length === 1 ? files[0].name : `Đã chọn ${files.length} file`}
             </p>
             <p className="text-sm text-slate-500 mb-4">
-              Tổng dung lượng: {(files.reduce((acc, f) => acc + f.size, 0) / 1024 / 1024).toFixed(2)} MB
+              Tổng dung lượng: {totalSizeMB} MB ({files.length} mục)
             </p>
             
             {status === "uploading" && (
               <div className="w-full max-w-xs mb-4">
                 <div className="flex justify-between text-xs text-slate-500 mb-1">
                   <span className="truncate max-w-[200px]">
-                    Đang tải ({currentFileIndex + 1}/{files.length}): {files[currentFileIndex].name}
+                    {isFolderUpload ? `Đang tải thư mục (${currentFileIndex + 1}/${files.length})...` : `Đang tải (${currentFileIndex + 1}/${files.length})...`}
                   </span>
                   <span>{progress}%</span>
                 </div>

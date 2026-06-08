@@ -78,6 +78,39 @@ export async function getOrCreateCustomerFolder(folderName: string) {
   }
 }
 
+export async function getOrCreateFolderInParent(folderName: string, parentId: string) {
+  try {
+    const drive = getDriveClient()
+
+    const query = `mimeType='application/vnd.google-apps.folder' and name='${folderName}' and trashed=false and '${parentId}' in parents`
+    const res = await drive.files.list({
+      q: query,
+      fields: "files(id, name)",
+      spaces: "drive"
+    })
+
+    if (res.data.files && res.data.files.length > 0) {
+      return { success: true, folderId: res.data.files[0].id }
+    }
+
+    const fileMetadata = {
+      name: folderName,
+      mimeType: "application/vnd.google-apps.folder",
+      parents: [parentId]
+    }
+
+    const createRes = await drive.files.create({
+      requestBody: fileMetadata,
+      fields: "id"
+    })
+
+    return { success: true, folderId: createRes.data.id }
+  } catch (error: any) {
+    console.error("Get/Create Subfolder Error:", error)
+    return { success: false, error: error.message }
+  }
+}
+
 export async function initResumableUpload(fileName: string, mimeType: string, targetFolderId: string, origin?: string, size?: number) {
   try {
     const oauth2Client = new google.auth.OAuth2(
