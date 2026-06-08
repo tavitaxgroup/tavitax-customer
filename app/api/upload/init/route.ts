@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server"
 import { auth } from "@/auth"
 import { initResumableUpload, getOrCreateCustomerFolder, getOrCreateFolderInParent } from "@/lib/google-drive"
 
-const folderIdCache = new Map<string, string>()
+const customerFolderPromiseCache = new Map<string, Promise<string>>()
+const subFolderPromiseCache = new Map<string, Promise<string>>()
 
 export async function POST(req: NextRequest) {
   try {
@@ -23,32 +24,55 @@ export async function POST(req: NextRequest) {
     // Sinh tên thư mục riêng cho khách hàng
     const folderName = `${session.user.name || "Khách hàng"} - ${session.user.email}`
     
-    // Lấy hoặc tạo thư mục
-    const folderResult = await getOrCreateCustomerFolder(folderName)
-    if (!folderResult.success || !folderResult.folderId) {
-      return NextResponse.json({ error: "Không thể khởi tạo thư mục khách hàng trên Drive" }, { status: 500 })
+    let targetFolderId: string
+    
+    // Lấy hoặc tạo thư mục khách hàng (có lock promise)
+    if (customerFolderPromiseCache.has(folderName)) {
+      try {
+        targetFolderId = await customerFolderPromiseCache.get(folderName)!
+      } catch (e) {
+        return NextResponse.json({ error: "Không thể khởi tạo thư mục khách hàng trên Drive" }, { status: 500 })
+      }
+    } else {
+      const promise = getOrCreateCustomerFolder(folderName).then(res => {
+        if (!res.success || !res.folderId) throw new Error("Failed to create customer folder")
+        return res.folderId
+      })
+      customerFolderPromiseCache.set(folderName, promise)
+      try {
+        targetFolderId = await promise
+      } catch (e) {
+        customerFolderPromiseCache.delete(folderName)
+        return NextResponse.json({ error: "Không thể khởi tạo thư mục khách hàng trên Drive" }, { status: 500 })
+      }
     }
 
-    let targetFolderId = folderResult.folderId
     let finalFileName = fileName
 
     const pathParts = fileName.split('/')
     if (pathParts.length > 1) {
       finalFileName = pathParts.pop()!
-      let currentPath = ""
       for (const part of pathParts) {
-        currentPath = currentPath ? `${currentPath}/${part}` : part
         const cacheKey = `${targetFolderId}_${part}`
         
-        if (folderIdCache.has(cacheKey)) {
-          targetFolderId = folderIdCache.get(cacheKey)!
-        } else {
-          const subResult = await getOrCreateFolderInParent(part, targetFolderId)
-          if (!subResult.success || !subResult.folderId) {
+        if (subFolderPromiseCache.has(cacheKey)) {
+          try {
+            targetFolderId = await subFolderPromiseCache.get(cacheKey)!
+          } catch(e) {
             return NextResponse.json({ error: "Lỗi tạo thư mục con trên Drive" }, { status: 500 })
           }
-          targetFolderId = subResult.folderId
-          folderIdCache.set(cacheKey, targetFolderId)
+        } else {
+          const promise = getOrCreateFolderInParent(part, targetFolderId).then(res => {
+            if (!res.success || !res.folderId) throw new Error("Failed to create subfolder")
+            return res.folderId
+          })
+          subFolderPromiseCache.set(cacheKey, promise)
+          try {
+            targetFolderId = await promise
+          } catch (e) {
+            subFolderPromiseCache.delete(cacheKey)
+            return NextResponse.json({ error: "Lỗi tạo thư mục con trên Drive" }, { status: 500 })
+          }
         }
       }
     }
