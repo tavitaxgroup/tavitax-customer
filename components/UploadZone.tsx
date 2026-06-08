@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useRef } from "react"
-import { UploadCloud, File, X, CheckCircle2, Loader2, AlertCircle, Folder } from "lucide-react"
+import { UploadCloud, File as FileIcon, X, CheckCircle2, Loader2, AlertCircle, Folder } from "lucide-react"
 import JSZip from "jszip"
 
 export function UploadZone() {
@@ -338,7 +338,7 @@ export function UploadZone() {
                 onClick={() => fileInputRef.current?.click()}
                 className="px-4 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-lg text-sm font-medium hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-2"
               >
-                <File className="w-4 h-4" /> Chọn File
+                <FileIcon className="w-4 h-4" /> Chọn File
               </button>
               <button 
                 onClick={() => folderInputRef.current?.click()}
@@ -351,7 +351,7 @@ export function UploadZone() {
         ) : (
           <div className="flex flex-col items-center z-10 relative">
             <div className="w-16 h-16 bg-blue-100 dark:bg-blue-900/30 text-blue-500 dark:text-blue-400 rounded-xl flex items-center justify-center mb-4">
-              {isFolderUpload || files.length > 1 ? <Folder className="w-8 h-8" /> : <File className="w-8 h-8" />}
+              {isFolderUpload || files.length > 1 ? <Folder className="w-8 h-8" /> : <FileIcon className="w-8 h-8" />}
             </div>
             <p className="font-medium text-slate-900 dark:text-white truncate max-w-xs">
               {isFolderUpload ? `Thư mục: ${folderName}` : files.length === 1 ? files[0].name : `Đã chọn ${files.length} file`}
