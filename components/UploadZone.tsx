@@ -50,6 +50,7 @@ export function UploadZone() {
       let currentIndex = 0
       let localCompleted = 0
       const CONCURRENCY = 4 // Upload 4 files concurrently
+      const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB chunks for large files
 
       const uploadNext = async (): Promise<void> => {
         if (hasError || currentIndex >= files.length) return
@@ -73,43 +74,69 @@ export function UploadZone() {
           if (!initRes.ok) throw new Error(`Không thể khởi tạo tải lên cho ${currentFile.name}`)
           const { uploadUrl } = await initRes.json()
 
-          // 2. Tải file thẳng lên Google Drive thông qua Resumable URL
-          const fileId = await new Promise<string>((resolve, reject) => {
-            const xhr = new XMLHttpRequest()
-            activeXhrsRef.current.add(xhr)
+          // 2. Tải file lên theo từng chunk (mảnh)
+          let uploadedBytes = 0;
+          let fileId = "";
 
-            xhr.upload.addEventListener("progress", (event) => {
-              if (event.lengthComputable && totalBytes > 0) {
-                loadedBytesRef.current[i] = event.loaded
-                const currentOverallUploaded = loadedBytesRef.current.reduce((a, b) => a + b, 0)
-                const percentComplete = Math.round((currentOverallUploaded / totalBytes) * 100)
-                setProgress(percentComplete > 100 ? 100 : percentComplete)
+          while (uploadedBytes < currentFile.size) {
+            if (hasError) break;
+
+            const chunkEnd = Math.min(uploadedBytes + CHUNK_SIZE, currentFile.size);
+            const chunk = currentFile.slice(uploadedBytes, chunkEnd);
+
+            fileId = await new Promise<string>((resolve, reject) => {
+              const xhr = new XMLHttpRequest()
+              activeXhrsRef.current.add(xhr)
+
+              xhr.upload.addEventListener("progress", (event) => {
+                if (event.lengthComputable && totalBytes > 0) {
+                  // progress tổng cộng là số byte đã upload của file này + chunk hiện tại đang truyền
+                  loadedBytesRef.current[i] = uploadedBytes + event.loaded
+                  const currentOverallUploaded = loadedBytesRef.current.reduce((a, b) => a + b, 0)
+                  const percentComplete = Math.round((currentOverallUploaded / totalBytes) * 100)
+                  setProgress(percentComplete > 100 ? 100 : percentComplete)
+                }
+              })
+
+              xhr.addEventListener("load", () => {
+                activeXhrsRef.current.delete(xhr)
+                // Google Drive trả về 308 (Resume Incomplete) cho các chunk chưa phải cuối cùng
+                if (xhr.status === 308) {
+                  resolve("incomplete") // Sẽ upload tiếp chunk sau
+                } 
+                // Trả về 200 hoặc 201 khi file đã hoàn tất
+                else if (xhr.status === 200 || xhr.status === 201) {
+                  const response = JSON.parse(xhr.responseText)
+                  resolve(response.id)
+                } else {
+                  reject(new Error("Lỗi khi tải mảnh dữ liệu lên Google Drive"))
+                }
+              })
+
+              xhr.addEventListener("error", () => {
+                activeXhrsRef.current.delete(xhr)
+                reject(new Error("Lỗi kết nối mạng"))
+              })
+              xhr.addEventListener("abort", () => {
+                activeXhrsRef.current.delete(xhr)
+                reject(new Error("Đã hủy tải lên"))
+              })
+
+              xhr.open("PUT", uploadUrl, true)
+              xhr.setRequestHeader("Content-Type", currentFile.type || "application/octet-stream")
+              
+              // Nếu file trống (size = 0), không cần Content-Range
+              if (currentFile.size > 0) {
+                xhr.setRequestHeader("Content-Range", `bytes ${uploadedBytes}-${chunkEnd - 1}/${currentFile.size}`)
               }
+              
+              xhr.send(chunk)
             })
 
-            xhr.addEventListener("load", () => {
-              activeXhrsRef.current.delete(xhr)
-              if (xhr.status >= 200 && xhr.status < 300) {
-                const response = JSON.parse(xhr.responseText)
-                resolve(response.id)
-              } else {
-                reject(new Error("Lỗi khi tải file lên Google Drive"))
-              }
-            })
+            uploadedBytes = chunkEnd;
+          }
 
-            xhr.addEventListener("error", () => {
-              activeXhrsRef.current.delete(xhr)
-              reject(new Error("Lỗi kết nối mạng"))
-            })
-            xhr.addEventListener("abort", () => {
-              activeXhrsRef.current.delete(xhr)
-              reject(new Error("Đã hủy tải lên"))
-            })
-
-            xhr.open("PUT", uploadUrl, true)
-            xhr.setRequestHeader("Content-Type", currentFile.type || "application/octet-stream")
-            xhr.send(currentFile)
-          })
+          if (hasError) return;
 
           loadedBytesRef.current[i] = currentFile.size
           if (totalBytes > 0) {
