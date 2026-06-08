@@ -2,12 +2,13 @@
 
 import { useState, useRef } from "react"
 import { UploadCloud, File, X, CheckCircle2, Loader2, AlertCircle, Folder } from "lucide-react"
+import JSZip from "jszip"
 
 export function UploadZone() {
   const [files, setFiles] = useState<File[]>([])
   const [completedCount, setCompletedCount] = useState(0)
   const [isDragging, setIsDragging] = useState(false)
-  const [status, setStatus] = useState<"idle" | "uploading" | "success" | "error">("idle")
+  const [status, setStatus] = useState<"idle" | "zipping" | "uploading" | "success" | "error">("idle")
   const [errorMsg, setErrorMsg] = useState("")
   const [progress, setProgress] = useState(0)
   
@@ -37,14 +38,40 @@ export function UploadZone() {
   const handleUpload = async () => {
     if (files.length === 0) return
 
-    setStatus("uploading")
+    setStatus("zipping")
     setProgress(0)
     setCompletedCount(0)
     setErrorMsg("")
 
     try {
-      const totalBytes = files.reduce((acc, f) => acc + f.size, 0)
-      loadedBytesRef.current = new Array(files.length).fill(0)
+      const isFolderUpload = files.length > 0 && files[0].webkitRelativePath !== ""
+      const folderName = isFolderUpload ? files[0].webkitRelativePath.split('/')[0] : ""
+      
+      let filesToProcess = files;
+
+      if (isFolderUpload) {
+        setStatus("zipping")
+        const zip = new JSZip();
+        files.forEach(f => {
+          zip.file(f.webkitRelativePath, f);
+        });
+
+        const zipBlob = await zip.generateAsync({ 
+          type: "blob",
+          compression: "STORE" // Nén không giảm dung lượng để đóng gói tức thì (tránh đơ máy)
+        }, (metadata) => {
+          setProgress(Math.round(metadata.percent));
+        });
+
+        const zipFile = new File([zipBlob], `${folderName}.zip`, { type: "application/zip" });
+        filesToProcess = [zipFile];
+      }
+
+      setStatus("uploading")
+      setProgress(0)
+
+      const totalBytes = filesToProcess.reduce((acc, f) => acc + f.size, 0)
+      loadedBytesRef.current = new Array(filesToProcess.length).fill(0)
       
       let hasError = false
       let currentIndex = 0
@@ -53,10 +80,10 @@ export function UploadZone() {
       const CHUNK_SIZE = 50 * 1024 * 1024; // 50MB chunks cho file siêu lớn
 
       const uploadNext = async (): Promise<void> => {
-        if (hasError || currentIndex >= files.length) return
+        if (hasError || currentIndex >= filesToProcess.length) return
         
         const i = currentIndex++
-        const currentFile = files[i]
+        const currentFile = filesToProcess[i]
         const fileName = currentFile.webkitRelativePath || currentFile.name
 
         let attempt = 0;
@@ -280,7 +307,7 @@ export function UploadZone() {
           className="hidden"
           ref={fileInputRef}
           onChange={handleFileChange}
-          disabled={status === "uploading"}
+          disabled={status === "uploading" || status === "zipping"}
         />
         <input 
           type="file" 
@@ -292,7 +319,7 @@ export function UploadZone() {
           className="hidden"
           ref={folderInputRef}
           onChange={handleFileChange}
-          disabled={status === "uploading"}
+          disabled={status === "uploading" || status === "zipping"}
         />
         
         {files.length === 0 ? (
@@ -333,11 +360,26 @@ export function UploadZone() {
               Tổng dung lượng: {totalSizeMB} MB ({files.length} mục)
             </p>
             
+            {status === "zipping" && (
+              <div className="w-full max-w-xs mb-4">
+                <div className="flex justify-between text-xs text-slate-500 mb-1">
+                  <span className="truncate max-w-[200px]">Đang đóng gói ZIP thư mục...</span>
+                  <span>{progress}%</span>
+                </div>
+                <div className="w-full bg-slate-200 dark:bg-slate-700 rounded-full h-2">
+                  <div 
+                    className="bg-brand-500 h-2 rounded-full transition-all duration-300"
+                    style={{ width: `${progress}%` }}
+                  ></div>
+                </div>
+              </div>
+            )}
+
             {status === "uploading" && (
               <div className="w-full max-w-xs mb-4">
                 <div className="flex justify-between text-xs text-slate-500 mb-1">
                   <span className="truncate max-w-[200px]">
-                    Đang tải ({Math.min(completedCount + 1, files.length)}/{files.length})...
+                    {isFolderUpload ? "Đang tải file ZIP lên Drive..." : `Đang tải (${Math.min(completedCount + 1, files.length)}/${files.length})...`}
                   </span>
                   <span>{progress}%</span>
                 </div>
@@ -359,11 +401,11 @@ export function UploadZone() {
               </button>
               <button 
                 onClick={(e) => { e.stopPropagation(); handleUpload() }}
-                disabled={status === "uploading" || status === "success"}
+                disabled={status === "uploading" || status === "zipping" || status === "success"}
                 className="px-4 py-2 rounded-lg text-sm font-medium bg-brand-600 text-white hover:bg-brand-700 flex items-center gap-2 disabled:opacity-50"
               >
-                {status === "uploading" && <Loader2 className="w-4 h-4 animate-spin" />}
-                {status === "uploading" ? "Đang xử lý..." : "Tải lên & Đồng bộ"}
+                {(status === "uploading" || status === "zipping") && <Loader2 className="w-4 h-4 animate-spin" />}
+                {status === "uploading" ? "Đang xử lý..." : status === "zipping" ? "Đang đóng gói..." : "Tải lên & Đồng bộ"}
               </button>
             </div>
           </div>
